@@ -62,6 +62,21 @@ launchctl setenv OPENAI_BASE_URL "https://你的中转站域名/v1"
 
 不要把 API key 发到聊天里。
 
+## 安全行为
+
+API key 和接口地址必须来自同一配置来源，并作为完整的一对使用。启动脚本按以下优先级选择：
+
+1. 当前进程的 `OPENAI_API_KEY` + `OPENAI_BASE_URL`
+2. macOS `launchctl` 中的 `OPENAI_API_KEY` + `OPENAI_BASE_URL`
+3. CCSwitch 当前 Codex provider 的 key + 接口地址
+4. Codex `config.toml` 根级 `model_provider` 对应的 `experimental_bearer_token` + `base_url`
+
+如果环境变量或 `launchctl` 只设置了一项，工具会报错，不会从其他来源补齐。CCSwitch 当前 provider 的凭证不完整、数据库无法解析或当前选中了官方 provider 时，也不会继续尝试其他 provider；仅在 CCSwitch 数据源不存在或没有当前 Codex provider 时，才尝试 Codex 配置文件。CCSwitch 的 provider 和接口地址会在同一个只读数据库事务中读取。
+
+**图片请求不跟随 HTTP 重定向**，包括同源重定向，防止 Bearer key 被转发到其他地址。遇到 `HTTP 301/302/303/307/308: Redirects are disabled` 时，应核对并直接配置受信任的最终 API 地址，不要关闭保护。
+
+本次保护不包括强制 HTTPS、文件大小限制和输出文件防覆盖；请继续使用 HTTPS 接口，并选择可信的中转服务。
+
 ## OpenToken / GPT Image 2.5
 
 默认图片模型为 `gpt-image-2.5-flare`。根据 [OpenToken 图片生成文档](https://docs.opentoken.io/api/openai/image-generation) 和 [图片编辑文档](https://docs.opentoken.io/api/openai/image-edit)，它仍使用 OpenAI 兼容的 `/v1/images/generations`（JSON）与 `/v1/images/edits`（multipart）接口，返回 `data[0].b64_json`。无需改用聊天接口。
@@ -191,7 +206,7 @@ python3 -m unittest discover -s tests -v
 zsh -n ccswitch-imagegen
 ```
 
-测试只使用本地模拟 HTTP 服务，不需要真实 API key，不调用 OpenToken，不产生生图费用。覆盖默认/指定模型、环境变量优先级、JSON 生成、自动/显式编辑模式、单图无 mask、PNG/JPEG/WEBP 文件字段、多参考图与 mask 编辑、2.5 质量档位、格式/背景/压缩、错误处理和仓库启动脚本的生成/编辑入口。
+测试只使用本地模拟 HTTP 服务、临时配置和模拟 `launchctl`，不读取真实 GUI 凭证，不需要真实 API key，不调用 OpenToken，不产生生图费用。覆盖默认/指定模型、环境变量优先级、JSON 生成、自动/显式编辑模式、单图无 mask、PNG/JPEG/WEBP 文件字段、多参考图与 mask 编辑、2.5 质量档位、格式/背景/压缩、错误处理和仓库启动脚本的生成/编辑入口。安全回归测试还覆盖生成/编辑重定向拦截、配置来源优先级、不完整凭证拒绝、官方 provider 与损坏数据库的安全停止，以及非活动 profile 不得选择凭证。
 
 ## 出问题时
 

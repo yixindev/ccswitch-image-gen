@@ -110,9 +110,17 @@ def _format_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward a credential-bearing request to a redirect target.
+        fp.close()
+        raise SystemExit(f"HTTP {code}: Redirects are disabled for credential-bearing image requests")
+
+
 def _open_json(request: urllib.request.Request) -> dict:
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
+        opener = urllib.request.build_opener(_NoRedirectHandler())
+        with opener.open(request, timeout=180) as response:
             result = json.loads(response.read().decode("utf-8"))
             if isinstance(result, dict) and "error" in result:
                 raise SystemExit(f"HTTP {response.status}: " + _format_json(result))

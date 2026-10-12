@@ -20,101 +20,105 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
   exit 0
 fi
 
-resolve_ccswitch_current_provider_key() {
+# Each resolver emits a complete pair from a single provider snapshot.
+# Exit 1 means unavailable; other errors must not fall through to a stale source.
+resolve_ccswitch_current_provider_credentials() {
   [[ -f "$CCSWITCH_DB" ]] || return 1
   python3 - "$CCSWITCH_DB" <<'PYCCSWITCH'
 import json, sqlite3, sys
+from contextlib import closing
+from pathlib import Path
 
-db = sys.argv[1]
-con = sqlite3.connect(db)
-con.row_factory = sqlite3.Row
-row = con.execute(
-    "SELECT id, name, settings_config FROM providers WHERE app_type='codex' AND is_current=1 LIMIT 1"
-).fetchone()
-if not row:
-    raise SystemExit(1)
-provider_id = row["id"]
-if provider_id in {"codex-official", "default", "openai"}:
-    raise SystemExit(2)
 try:
-    cfg = json.loads(row["settings_config"] or "{}")
-except Exception:
-    cfg = {}
-key = (((cfg.get("auth") or {}).get("OPENAI_API_KEY")) or cfg.get("OPENAI_API_KEY") or "")
-if not isinstance(key, str) or not key:
+    uri = Path(sys.argv[1]).resolve().as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True)) as con:
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN")
+        row = con.execute(
+            "SELECT id, settings_config FROM providers WHERE app_type='codex' AND is_current=1 LIMIT 1"
+        ).fetchone()
+        if not row:
+            raise SystemExit(1)
+        provider_id = row["id"]
+        if provider_id in {"codex-official", "default", "openai"}:
+            raise SystemExit(2)
+        cfg = json.loads(row["settings_config"] or "{}")
+        key = ((cfg.get("auth") or {}).get("OPENAI_API_KEY") or cfg.get("OPENAI_API_KEY") or "")
+        endpoint = con.execute(
+            "SELECT url FROM provider_endpoints WHERE app_type='codex' AND provider_id=? ORDER BY id LIMIT 1",
+            (provider_id,),
+        ).fetchone()
+        base_url = endpoint["url"] if endpoint else ""
+        if not base_url:
+            base_url = cfg.get("base_url") or cfg.get("baseUrl") or cfg.get("url") or ""
+    if any(not isinstance(v, str) or not v.strip() or "\n" in v or "\r" in v for v in (key, base_url)):
+        raise SystemExit(3)
+    base_url = base_url.rstrip("/")
+    if not base_url.endswith("/v1"):
+        base_url += "/v1"
+except (OSError, sqlite3.Error, ValueError, AttributeError, TypeError):
     raise SystemExit(3)
 print(key)
-PYCCSWITCH
-}
-
-resolve_ccswitch_current_provider_base_url() {
-  [[ -f "$CCSWITCH_DB" ]] || return 1
-  python3 - "$CCSWITCH_DB" <<'PYCCSWITCH'
-import json, sqlite3, sys
-
-db = sys.argv[1]
-con = sqlite3.connect(db)
-con.row_factory = sqlite3.Row
-row = con.execute(
-    "SELECT id, name, settings_config FROM providers WHERE app_type='codex' AND is_current=1 LIMIT 1"
-).fetchone()
-if not row:
-    raise SystemExit(1)
-provider_id = row["id"]
-if provider_id in {"codex-official", "default", "openai"}:
-    raise SystemExit(2)
-try:
-    cfg = json.loads(row["settings_config"] or "{}")
-except Exception:
-    cfg = {}
-endpoint = con.execute(
-    "SELECT url FROM provider_endpoints WHERE app_type='codex' AND provider_id=? ORDER BY id LIMIT 1",
-    (provider_id,),
-).fetchone()
-base_url = endpoint["url"] if endpoint else ""
-if not base_url:
-    base_url = cfg.get("base_url") or cfg.get("baseUrl") or cfg.get("url") or ""
-if not isinstance(base_url, str) or not base_url:
-    raise SystemExit(4)
-base_url = base_url.rstrip("/")
-if not base_url.endswith("/v1"):
-    base_url += "/v1"
 print(base_url)
 PYCCSWITCH
 }
 
-resolve_active_config_value() {
+resolve_active_config_credentials() {
   [[ -f "$CONFIG" ]] || return 1
-  python3 - "$CONFIG" "$1" <<'PYCONFIG'
+  python3 - "$CONFIG" <<'PYCONFIG'
 from pathlib import Path
 import re, sys
-text = Path(sys.argv[1]).read_text(errors="replace")
-name = sys.argv[2]
+
+try:
+    lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+except (OSError, UnicodeError):
+    raise SystemExit(3)
 provider = None
-for line in text.splitlines():
+# Only the root model_provider selects the active provider, not profile values.
+for line in lines:
+    if line.strip().startswith("["):
+        break
     m = re.match(r'\s*model_provider\s*=\s*"([^"]+)"', line)
     if m:
         provider = m.group(1)
         break
 if not provider:
     raise SystemExit(1)
+if provider == "openai":
+    raise SystemExit(2)
 section = f"[model_providers.{provider}]"
 in_section = False
-for line in text.splitlines():
+values = {}
+for line in lines:
     stripped = line.strip()
     if stripped.startswith("["):
         in_section = stripped == section
         continue
     if in_section:
-        m = re.match(r'\s*' + re.escape(name) + r'\s*=\s*"([^"]+)"', line)
+        m = re.match(r'\s*(experimental_bearer_token|base_url)\s*=\s*"([^"]+)"', line)
         if m:
-            print(m.group(1))
-            raise SystemExit(0)
-raise SystemExit(1)
+            values[m.group(1)] = m.group(2)
+key = values.get("experimental_bearer_token", "")
+base_url = values.get("base_url", "")
+if any(not v.strip() or "\n" in v or "\r" in v for v in (key, base_url)):
+    raise SystemExit(3)
+print(key)
+print(base_url)
 PYCONFIG
 }
 
-# Prefer explicit env, then GUI launch env, then CCSwitch, then the active Codex config.
+use_credentials_pair() {
+  local -a pair
+  pair=("${(@f)1}")
+  if (( ${#pair} != 2 )) || [[ -z "${pair[1]}" || -z "${pair[2]}" ]]; then
+    echo "Invalid provider credentials; refusing to mix configuration sources." >&2
+    exit 1
+  fi
+  export OPENAI_API_KEY="${pair[1]}"
+  export OPENAI_BASE_URL="${pair[2]}"
+}
+
+# Model selection is independent of the credential/address pair.
 if [[ -z "${OPENAI_IMAGE_MODEL:-}" ]]; then
   gui_model=$(launchctl getenv OPENAI_IMAGE_MODEL 2>/dev/null || true)
   if [[ -n "$gui_model" ]]; then
@@ -122,55 +126,38 @@ if [[ -z "${OPENAI_IMAGE_MODEL:-}" ]]; then
   fi
 fi
 
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+# Explicit environment credentials must be complete; never fill one half
+# from launchctl, CCSwitch, or config.toml.
+if [[ -n "${OPENAI_API_KEY:-}" || -n "${OPENAI_BASE_URL:-}" ]]; then
+  if [[ -z "${OPENAI_API_KEY:-}" || -z "${OPENAI_BASE_URL:-}" ]]; then
+    echo "OPENAI_API_KEY and OPENAI_BASE_URL must be set together in the environment; refusing to mix configuration sources." >&2
+    exit 1
+  fi
+else
   gui_key=$(launchctl getenv OPENAI_API_KEY 2>/dev/null || true)
-  if [[ -n "$gui_key" ]]; then
-    export OPENAI_API_KEY="$gui_key"
-  fi
-fi
-
-if [[ -z "${OPENAI_BASE_URL:-}" ]]; then
   gui_base=$(launchctl getenv OPENAI_BASE_URL 2>/dev/null || true)
-  if [[ -n "$gui_base" ]]; then
+  if [[ -n "$gui_key" || -n "$gui_base" ]]; then
+    if [[ -z "$gui_key" || -z "$gui_base" ]]; then
+      echo "OPENAI_API_KEY and OPENAI_BASE_URL must be set together in launchctl; refusing to mix configuration sources." >&2
+      exit 1
+    fi
+    export OPENAI_API_KEY="$gui_key"
     export OPENAI_BASE_URL="$gui_base"
+  elif credentials=$(resolve_ccswitch_current_provider_credentials); then
+    use_credentials_pair "$credentials"
+  else
+    resolver_status=$?
+    if (( resolver_status != 1 )); then
+      echo "Current CCSwitch provider is official, invalid, or missing a complete key/base_url pair; refusing to fall back to another provider." >&2
+      exit 1
+    fi
+    if credentials=$(resolve_active_config_credentials); then
+      use_credentials_pair "$credentials"
+    else
+      echo "No complete relay key/base_url pair found. Set OPENAI_API_KEY and OPENAI_BASE_URL together or select a configured non-official provider." >&2
+      exit 1
+    fi
   fi
-fi
-
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  cc_key=$(resolve_ccswitch_current_provider_key 2>/dev/null || true)
-  if [[ -n "$cc_key" ]]; then
-    export OPENAI_API_KEY="$cc_key"
-  fi
-fi
-
-if [[ -z "${OPENAI_BASE_URL:-}" ]]; then
-  cc_base=$(resolve_ccswitch_current_provider_base_url 2>/dev/null || true)
-  if [[ -n "$cc_base" ]]; then
-    export OPENAI_BASE_URL="$cc_base"
-  fi
-fi
-
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  config_key=$(resolve_active_config_value experimental_bearer_token 2>/dev/null || true)
-  if [[ -n "$config_key" ]]; then
-    export OPENAI_API_KEY="$config_key"
-  fi
-fi
-
-if [[ -z "${OPENAI_BASE_URL:-}" ]]; then
-  config_base=$(resolve_active_config_value base_url 2>/dev/null || true)
-  if [[ -n "$config_base" ]]; then
-    export OPENAI_BASE_URL="$config_base"
-  fi
-fi
-
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  echo "OPENAI_API_KEY is missing. Set it in the environment or select a non-official Codex provider in CCSwitch." >&2
-  exit 1
-fi
-if [[ -z "${OPENAI_BASE_URL:-}" ]]; then
-  echo "OPENAI_BASE_URL is missing and no active provider base_url was found." >&2
-  exit 1
 fi
 
 python3 "$IMAGE_GEN" "$@"
