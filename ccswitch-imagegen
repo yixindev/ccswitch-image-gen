@@ -3,9 +3,14 @@ set -euo pipefail
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 CONFIG="$CODEX_HOME/config.toml"
 CCSWITCH_DB="$HOME/.cc-switch/cc-switch.db"
-IMAGE_GEN="$CODEX_HOME/bin/ccswitch-image-gen.py"
+# Prefer the sibling script so a cloned checkout can run before installation.
+SCRIPT_DIR="${0:A:h}"
+IMAGE_GEN="$SCRIPT_DIR/ccswitch-image-gen.py"
+if [[ ! -f "$IMAGE_GEN" ]]; then
+  IMAGE_GEN="$CODEX_HOME/bin/ccswitch-image-gen.py"
+fi
 
-if [[ ! -x "$IMAGE_GEN" ]]; then
+if [[ ! -f "$IMAGE_GEN" ]]; then
   echo "Missing image fallback: $IMAGE_GEN" >&2
   exit 1
 fi
@@ -110,6 +115,13 @@ PYCONFIG
 }
 
 # Prefer explicit env, then GUI launch env, then CCSwitch, then the active Codex config.
+if [[ -z "${OPENAI_IMAGE_MODEL:-}" ]]; then
+  gui_model=$(launchctl getenv OPENAI_IMAGE_MODEL 2>/dev/null || true)
+  if [[ -n "$gui_model" ]]; then
+    export OPENAI_IMAGE_MODEL="$gui_model"
+  fi
+fi
+
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
   gui_key=$(launchctl getenv OPENAI_API_KEY 2>/dev/null || true)
   if [[ -n "$gui_key" ]]; then

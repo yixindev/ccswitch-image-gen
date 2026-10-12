@@ -60,7 +60,7 @@ body:
     id: model
     attributes:
       label: Model
-      placeholder: gpt-image-2
+      placeholder: gpt-image-2.5-flare
     validations:
       required: true
   - type: input

@@ -14,6 +14,15 @@ Codex App 使用第三方中转 provider 时的图片生成 fallback。
 
 ## 安装
 
+先克隆源码（已有本地仓库时可跳过）：
+
+```bash
+git clone https://github.com/wengzige/codex-imagegen-relay-fallback.git
+cd codex-imagegen-relay-fallback
+```
+
+可先在仓库内运行 `./ccswitch-imagegen --help`，确认参数后再安装：
+
 ```bash
 mkdir -p ~/.codex/bin
 cp ccswitch-imagegen ~/.codex/bin/ccswitch-imagegen
@@ -53,6 +62,35 @@ launchctl setenv OPENAI_BASE_URL "https://你的中转站域名/v1"
 
 不要把 API key 发到聊天里。
 
+## OpenToken / GPT Image 2.5
+
+默认图片模型为 `gpt-image-2.5-flare`。根据 [OpenToken 图片生成文档](https://docs.opentoken.io/api/openai/image-generation) 和 [图片编辑文档](https://docs.opentoken.io/api/openai/image-edit)，它仍使用 OpenAI 兼容的 `/v1/images/generations`（JSON）与 `/v1/images/edits`（multipart）接口，返回 `data[0].b64_json`。无需改用聊天接口。
+
+使用 OpenToken 时，显式配置图片接口的凭证和地址（优先于 CCSwitch / Codex 配置）：
+
+```bash
+export OPENAI_API_KEY="你的 OpenToken key"
+export OPENAI_BASE_URL="https://gw.opentoken.io/v1"
+export OPENAI_IMAGE_MODEL="gpt-image-2.5-flare"  # 可省略，已是默认值
+```
+
+OpenToken 文档里的 `OPEN_TOKEN_KEY` 对应本工具的 `OPENAI_API_KEY`；如果已经设置前者，可用 `export OPENAI_API_KEY="$OPEN_TOKEN_KEY"`。
+
+模型选择优先级：`--model` > `OPENAI_IMAGE_MODEL` > `gpt-image-2.5-flare`。macOS GUI 可用 `launchctl setenv OPENAI_IMAGE_MODEL "gpt-image-2.5-flare"` 配置模型。仍可通过 `--model gpt-image-2` 使用旧模型，或通过 `--model gpt-image-2.5-sunburst` 使用另一个 2.5 模型，前提是你的中转服务支持。
+
+| 参数 | 说明 |
+| --- | --- |
+| `--mode` | 默认 `auto`：有 `--image` 时编辑，否则生成；也可显式指定 `edit` 或 `generate` |
+| `--quality` | 默认 `high`；2.5 支持 `low` / `medium` / `high` / `xhigh` / `max` / `auto` |
+| `--size` | 默认 `1024x1536`；可传 `auto`、`1024x1024`、`1536x1024`、`2048x2048`、`2048x1152`、`3840x2160`、`2160x3840` 等 |
+| `--output-format` | `png` / `jpeg` / `webp`；不传时由服务端决定，OpenToken 默认为 PNG |
+| `--background` | `auto` / `opaque` / `transparent`；透明背景需要 PNG 或 WEBP |
+| `--output-compression` | 0–100，必须同时指定 `--output-format jpeg` 或 `webp` |
+
+自定义尺寸仍须满足 OpenToken 的限制：宽高为 16 的倍数、单边不超过 3840、长短边比不超过 3:1、总像素在 655,360–8,294,400 之间。脚本保留原样传递模型名、尺寸和质量的行为，不对其他中转服务强制套用 OpenToken 的限制。
+
+工具每次保存第一张图片，不提供多张输出的 `n` 参数。输出文件扩展名不会自动决定编码；使用 JPEG/WEBP 时请让 `--output` 扩展名与 `--output-format` 一致。新增的格式、背景、压缩字段只在明确指定时发送，避免影响旧中转站。
+
 ## 在 Codex App 里用
 
 配置好后，直接正常说生图需求即可：
@@ -81,26 +119,79 @@ EOF
 ~/.codex/bin/ccswitch-imagegen \
   --prompt-file prompt.txt \
   --output output.png \
-  --model gpt-image-2 \
+  --model gpt-image-2.5-flare \
   --size 1024x1536 \
   --quality high
 ```
 
-根据图片生成 / 编辑图片：
+### Image Edit：根据原图编辑
+
+传入 `--image` 会自动调用 `/v1/images/edits`，也可以用 `--mode edit` 显式选择编辑模式。原图以 multipart 的 `image` 文件字段上传，不会把文件路径当作提示词或改用聊天接口。原图支持 PNG、JPEG、WEBP；不需要局部遮罩时，省略 `--mask` 即可。
+
+```bash
+cat > edit-prompt.txt <<'EOF'
+在原图天空中添加一道彩虹，保留原有建筑、人物和构图。
+EOF
+```
+
+单图编辑（不带 mask）：
 
 ```bash
 ~/.codex/bin/ccswitch-imagegen \
+  --mode edit \
   --prompt-file edit-prompt.txt \
   --image input.png \
   --output edited.png \
-  --model gpt-image-2 \
+  --model gpt-image-2.5-flare \
   --size 1024x1536 \
   --quality high
 ```
 
-多张参考图可以重复传 `--image`；局部编辑可以加 `--mask mask.png`，前提是中转站支持。
+局部编辑（带 mask）：
+
+```bash
+~/.codex/bin/ccswitch-imagegen \
+  --mode edit \
+  --prompt-file edit-prompt.txt \
+  --image input.png \
+  --mask mask.png \
+  --output outputs/edited-region.png \
+  --model gpt-image-2.5-flare \
+  --size auto \
+  --quality max \
+  --output-format png
+```
+
+`mask.png` 必须是**带透明通道、与原图尺寸相同的 PNG**，透明区域表示需要编辑的部分。`--size` 是输出尺寸，不是 mask 尺寸。脚本检查文件存在且可读、mask 必须伴随原图；图片内容、透明通道和尺寸约束由服务端校验。
+
+旧命令无需改动：省略 `--mode` 时仍会自动识别编辑请求。`--mode edit` 没有原图、或 `--mode generate` 搭配原图/mask，会在发送请求前报错，避免误走生成接口。编辑请求同样支持输出格式、背景和压缩参数，并将响应中的 `data[0].b64_json` 保存到 `--output`。
+
+更高质量的透明背景 WEBP（生成和编辑均支持这些参数）：
+
+```bash
+~/.codex/bin/ccswitch-imagegen \
+  --prompt-file prompt.txt \
+  --output output.webp \
+  --model gpt-image-2.5-flare \
+  --size 1024x1024 \
+  --quality xhigh \
+  --background transparent \
+  --output-format webp \
+  --output-compression 90
+```
+
+多张参考图可以重复传 `--image`，工具会上传多个同名 `image` 文件字段。OpenToken 该文档明确展示的是单图编辑，多图是否被接受需由中转服务确认；使用 mask 时建议按文档采用单张原图。
 
 中文、长提示词、包含标点或换行的提示词，建议始终写进 `--prompt-file`。
+
+## 本地测试
+
+```bash
+python3 -m unittest discover -s tests -v
+zsh -n ccswitch-imagegen
+```
+
+测试只使用本地模拟 HTTP 服务，不需要真实 API key，不调用 OpenToken，不产生生图费用。覆盖默认/指定模型、环境变量优先级、JSON 生成、自动/显式编辑模式、单图无 mask、PNG/JPEG/WEBP 文件字段、多参考图与 mask 编辑、2.5 质量档位、格式/背景/压缩、错误处理和仓库启动脚本的生成/编辑入口。
 
 ## 出问题时
 

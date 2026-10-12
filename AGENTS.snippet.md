@@ -13,6 +13,8 @@ Detection:
 
 Relay mode:
 
+The default relay image model is `gpt-image-2.5-flare`. If the user explicitly requests another model, pass that model with `--model` instead. GPT Image 2.5 also supports `--quality xhigh` and `--quality max`.
+
 1. Use the raw HTTP fallback command instead of assuming the OpenAI SDK works with the relay image endpoint.
 2. Write long or non-ASCII prompts to a prompt file and call:
 
@@ -20,7 +22,7 @@ Relay mode:
 ~/.codex/bin/ccswitch-imagegen \
   --prompt-file <prompt.txt> \
   --output <output.png> \
-  --model gpt-image-2 \
+  --model gpt-image-2.5-flare \
   --size 1024x1536 \
   --quality high
 ```
@@ -33,4 +35,24 @@ Official mode:
 Use the normal built-in `image_gen` path.
 
 
-中转图片编辑补充：如果用户提供输入图、参考图或要求根据图片生成/编辑图片，使用 `/Users/anger/.codex/bin/ccswitch-imagegen --prompt-file <prompt.txt> --image <input.png> --output <output.png> --model gpt-image-2`。多图重复传 `--image`，局部编辑可传 `--mask <mask.png>`。
+## Relay Image Edit
+
+If the user supplies an original/reference image or requests image editing, upload the actual local image using the multipart `/images/edits` endpoint:
+
+```bash
+~/.codex/bin/ccswitch-imagegen \
+  --mode edit \
+  --prompt-file <edit-prompt.txt> \
+  --image <input.png> \
+  --output <outputs/edited.png> \
+  --model gpt-image-2.5-flare \
+  --size auto \
+  --quality high
+```
+
+- `--image` supports PNG/JPEG/WEBP. Never substitute an image pathname in the prompt for uploading the file.
+- For whole-image edits, omit `--mask`.
+- For local edits, add `--mask <mask.png>`. The mask must be a PNG with an alpha channel and the same dimensions as the original; transparent areas are edited. `--size` controls output dimensions, not mask dimensions.
+- Repeat `--image` only when the relay supports multiple references. OpenToken's cited Image Edit documentation explicitly demonstrates single-image edits.
+- Existing commands without `--mode edit` remain valid: supplying `--image` automatically selects editing.
+- Honor an explicitly requested model; do not overwrite the original image unless the user asks to.
