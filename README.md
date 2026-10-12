@@ -17,8 +17,8 @@ Codex App 使用第三方中转 provider 时的图片生成 fallback。
 先克隆源码（已有本地仓库时可跳过）：
 
 ```bash
-git clone https://github.com/wengzige/codex-imagegen-relay-fallback.git
-cd codex-imagegen-relay-fallback
+git clone https://github.com/yixindev/ccswitch-image-gen.git
+cd ccswitch-image-gen
 ```
 
 可先在仓库内运行 `./ccswitch-imagegen --help`，确认参数后再安装：
