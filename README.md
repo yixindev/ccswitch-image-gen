@@ -139,6 +139,94 @@ EOF
   --quality high
 ```
 
+### 透明 PNG 示例：机器人捧着幼苗
+
+下面的示例使用 `gpt-image-2.5-sunburst`，质量 `high`，尺寸 `1024x1024`，显式指定 `transparent` 背景和 `png` 输出。提示词去掉了“顶部写字”和“不要文字”的冲突，并区分了**不透明主体**与**透明背景**。
+
+可直接把以下需求发给 Codex：
+
+```text
+生成一张图片，参数如下：
+- 模型：gpt-image-2.5-sunburst
+- 图片质量：high
+- 背景：transparent
+- 输出格式：png
+- 尺寸：1024x1024
+
+画面内容：一个可爱的白色 3D 机器人，双手轻轻捧着一盆绿色幼苗。
+机器人有圆润的白色机身、亲切可爱的表情，材质精致，轮廓清晰。
+花盆简洁小巧，幼苗翠绿、有生机。
+机器人全身、双手、双脚、花盆和幼苗均完整呈现，主体居中，四周留出充足的透明空白，不裁切任何部位。
+只保留机器人、它手中的花盆和盆里的幼苗。不要背景、地面、底座、背景装饰或投射到地面的阴影。
+不要任何文字、汉字、字母、数字、标志或水印，顶部也不添加文字。
+背景必须使用真正的 PNG Alpha 透明通道，主体外的像素完全透明。
+机器人、花盆和幼苗的实体表面保持不透明，仅轮廓边缘允许自然抗锯齿的半透明像素。
+不要使用白底，也不要绘制棋盘格来模拟透明背景。边缘干净，没有白边或背景残留。
+
+将接口返回的原始 PNG 保存到当前项目的 outputs 文件夹，不做去背、重编码或其他后处理。
+生成后检查图片的 Alpha 通道，确认存在真正透明的像素，并展示结果。
+如果该模型不可用，请报告错误，不要自动替换成 flare 或其他模型。
+```
+
+终端调用同一示例：
+
+```bash
+mkdir -p tmp/imagegen outputs
+cat > tmp/imagegen/transparent-robot-prompt.txt <<'EOF'
+生成一张高质量透明背景 PNG：一个可爱的白色 3D 机器人，双手轻轻捧着一盆绿色幼苗。
+机器人有圆润的白色机身、亲切可爱的表情，材质精致，轮廓清晰。花盆简洁小巧，幼苗翠绿、有生机。
+机器人全身、双手、双脚、花盆和幼苗均完整呈现，主体居中，四周留出充足的透明空白，不裁切任何部位。
+只保留机器人、它手中的花盆和盆里的幼苗。不要背景、地面、底座、背景装饰或投射到地面的阴影。
+不要任何文字、汉字、字母、数字、标志或水印，顶部也不添加文字。
+背景必须使用真正的 PNG Alpha 透明通道，主体外的像素完全透明。
+机器人、花盆和幼苗的实体表面保持不透明，仅轮廓边缘允许自然抗锯齿的半透明像素。
+不要使用白底，也不要绘制棋盘格来模拟透明背景。边缘干净，没有白边或背景残留。
+EOF
+
+~/.codex/bin/ccswitch-imagegen \
+  --mode generate \
+  --prompt-file tmp/imagegen/transparent-robot-prompt.txt \
+  --output outputs/white-robot-seedling-sunburst-original.png \
+  --model gpt-image-2.5-sunburst \
+  --quality high \
+  --background transparent \
+  --output-format png \
+  --size 1024x1024
+```
+
+`--model` 会原样传给中转服务；如果服务不支持 `gpt-image-2.5-sunburst`，工具会报告接口错误，不会自动换成 `flare` 或其他模型。输出路径若已有文件会被覆盖，保留历史结果时请先更换文件名。
+
+生成后验证 Alpha 通道（需要 Pillow；未安装时可运行 `python3 -m pip install Pillow`）：
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+from PIL import Image
+
+path = Path("outputs/white-robot-seedling-sunburst-original.png")
+with Image.open(path) as image:
+    image.load()
+    if image.format != "PNG" or image.size != (1024, 1024):
+        raise SystemExit(f"检查失败：格式或尺寸不符：{image.format}, {image.size}")
+    if "A" not in image.getbands() and "transparency" not in image.info:
+        raise SystemExit("检查失败：PNG 没有 Alpha 通道或透明信息")
+    alpha = image.convert("RGBA").getchannel("A")
+    histogram = alpha.histogram()
+    total = image.width * image.height
+    print(f"文件：{path.resolve()}")
+    print(f"格式：{image.format}；尺寸：{image.size}；模式：{image.mode}")
+    print(f"Alpha 范围：{alpha.getextrema()}")
+    print(f"完全透明像素：{histogram[0]}（{histogram[0] / total:.2%}）")
+    print(f"半透明像素：{sum(histogram[1:255])}")
+    print(f"完全不透明像素：{histogram[255]}")
+    if histogram[0] == 0 or histogram[0] == total:
+        raise SystemExit("检查失败：没有完全透明像素，或整张图片完全透明")
+    print("检查通过：图片同时存在完全透明像素和可见像素。")
+PY
+```
+
+**提示词和 `--background transparent` 都不能代替文件检查。** 上述检查确认真实透明像素存在，但不保证所有背景都透明、主体完全不透明或轮廓没有残留；还应展示原图，必要时在深色、浅色背景上预览边缘。不要仅凭预览中的白底或棋盘格判断透明，也不要把后处理图片当作接口返回的原始 PNG。
+
 ### Image Edit：根据原图编辑
 
 传入 `--image` 会自动调用 `/v1/images/edits`，也可以用 `--mode edit` 显式选择编辑模式。原图以 multipart 的 `image` 文件字段上传，不会把文件路径当作提示词或改用聊天接口。原图支持 PNG、JPEG、WEBP；不需要局部遮罩时，省略 `--mask` 即可。
