@@ -85,7 +85,7 @@ API key 和接口地址必须来自同一配置来源，并作为完整的一对
 
 ```bash
 export OPENAI_API_KEY="你的 OpenToken key"
-export OPENAI_BASE_URL="https://gw.opentoken.io/v1"
+export OPENAI_BASE_URL="https://cn2.gw.opentoken.io/v1"
 export OPENAI_IMAGE_MODEL="gpt-image-2.5-flare"  # 可省略，已是默认值
 ```
 
